@@ -102,10 +102,11 @@ Docker.prototype.parseOpts = function(opts){
     sidebarState: true,
     exclude: false,
     lineNums: false,
-    multiLineOnly: false,
     js: [],
     css: [],
-    extras: []
+    extras: [],
+    requireconfig: null,
+    baseURL: null
   };
 
   // Loop through and fix up any unspecified options with the defaults.
@@ -124,7 +125,8 @@ Docker.prototype.parseOpts = function(opts){
   this.lineNums = !!opts.lineNums;
   this.extraJS = opts.js || [];
   this.extraCSS = opts.css || [];
-  this.multiLineOnly = !!opts.multiLineOnly;
+  this.requireconfig = opts.requireconfig;
+  this.baseURL = opts.baseURL;
 
   // Generate an exclude regex for the given pattern
   if(typeof opts.exclude === 'string'){
@@ -393,6 +395,7 @@ Docker.prototype.generateDoc = function(infilename, cb){
     if(!shouldProcess) return cb();
     fs.readFile(filename, 'utf-8', function(err, data){
       if(err) throw err;
+      data = self.linkModules(data);
       var lang = self.languageParams(filename, data);
       if(lang === false) return cb();
       self.addFileToTree(infilename);
@@ -460,6 +463,46 @@ Docker.prototype.fileIsNewer = function(file, otherFile, callback){
 };
 
 /**
+ * ## Docker.prototype.linkModules
+ *
+ * Injects links into the HTML for all define() and require() modules.
+ * Requires that your require config be passed in
+ *
+ * @param {string} data The contents of the script file
+ *
+ * @return {string} data The modified contents of the script file
+ */
+Docker.prototype.linkModules = function(data){
+  //Added by Ian
+  //Finds matches for 'define([*]', 'require([*]' and 'require(*)'
+  var requires = data.match(/(define\(\[.+?\])|(require\(\[.+?\])|(require\(.+?\))/g);
+  // Loop through all the require or define calls
+  for(var i = 0; i < requires.length; i += 1){
+    //Remove all the cruft around the module names
+    var text = requires[i].replace("define([","").replace("require([","").replace("]","");
+    //split into all separately included modules
+    text = text.split(",");
+    for (var j=0; j < text.length; j += 1){
+      //Get the module name without quotes
+      var moduleName = text[j].replace(/['"]/g,"").replace("text!","").replace("css!","");
+      //var moduleName = text[j];
+      //Get the path fragments of the module name
+      var modules = moduleName.split("/");
+      //If the first path fragment is mapped in the require config, use that
+      //Otherwise just use that string
+      var moduleLink = this.requireconfig ? this.requireconfig[ modules[0] ] || modules[0]+"/" : modules[0]+"/";
+      //Join the rest of the fragments without the first one
+      moduleLink += modules.slice(1).join("/") + ".js.html";
+      //replace the module name with the link to the module
+      data = data.replace(text[j],"r{r{a href="+moduleLink+" target='_blank' r}r}"+text[j]+"r{r{/ar}r}");
+    }
+
+  }
+
+  return data;
+};
+
+/**
  * ## Docker.prototype.parseSections
  *
  * Parse the content of a file into individual sections.
@@ -478,6 +521,8 @@ Docker.prototype.fileIsNewer = function(file, otherFile, callback){
  * @return {Array} array of section objects
  */
 Docker.prototype.parseSections = function(data, language){
+  //data = this.linkModules(data);
+
   var codeLines = data.split('\n');
   var sections = [];
 
@@ -573,7 +618,6 @@ Docker.prototype.parseSections = function(data, language){
       }
     }
     if(
-      !this.multiLineOnly &&
       params.comment &&
       matchable.match(commentRegex) &&
       (!params.commentsIgnore || !matchable.match(params.commentsIgnore)) &&
@@ -632,15 +676,6 @@ Docker.prototype.parseMultiline = function(comment){
   // to remove the type from it.
   function grabType(bits){
     var type = bits.shift();
-    var badChars = /[&<>"'`]/g;
-    var escape = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#x27;",
-      "`": "&#x60;"
-    };
 
     // Carry on adding bits until we reach a closing brace
     while(bits.length && type.indexOf('}') === -1) type += bits.shift();
@@ -652,12 +687,6 @@ Docker.prototype.parseMultiline = function(comment){
       bits.unshift(type.replace(/^.*\}(.*)$/, '$1'));
       type = type.replace(/\}.*$/,'}');
     }
-
-    function escapeChar(chr) {
-      return escape[chr] || "&amp;";
-    }
-
-    type = type.replace(badChars, escapeChar);
 
     return type.replace(/[{}]/g,'');
   }
@@ -675,22 +704,17 @@ Docker.prototype.parseMultiline = function(comment){
       var tagType = tag.type = bits.shift();
 
       switch(tagType){
-        case 'arg':
-        case 'argument':
         case 'param':
           // `@param {typename} paramname Parameter description`
           if(bits[0].charAt(0) == '{') tag.types = grabType(bits).split(/ *[|,\/] */);
           tag.name = bits.shift() || '';
           tag.description = bits.join(' ');
-          tag.type = 'param';
           break;
 
-        case 'returns':
         case 'return':
           // `@return {typename} Return description`
           if(bits[0].charAt(0) == '{') tag.types = grabType(bits).split(/ *[|,\/] */);
           tag.description = bits.join(' ');
-          tag.type = 'return';
           break;
 
         case 'type':
@@ -698,19 +722,9 @@ Docker.prototype.parseMultiline = function(comment){
           tag.types = grabType(bits).split(/ *[|,\/] */);
           break;
 
-        case 'access':
         case 'api':
           // `@api public` or `@api private` etc.
           tag.visibility = bits.shift();
-          tag.type = 'api';
-          break;
-
-        case 'private':
-        case 'protected':
-        case 'public':
-          // `@public` or `@private` etc.
-          tag.visibility = tagType;
-          tag.type = 'api';
           break;
 
         case 'see':
@@ -722,11 +736,6 @@ Docker.prototype.parseMultiline = function(comment){
             tag.local = bits.join(' ');
           }
           break;
-        default:
-          if(bits.length > 0 && bits[0].charAt(0) == '{') tag.types = grabType(bits).split(/ *[|,\/] */);
-          tag.description = bits.join(' ');
-          tag.name = tagType;
-          tag.type = 'unknown';
       }
 
       return tag;
@@ -856,11 +865,6 @@ Docker.prototype.languages = {
     names: [ 'cakefile' ],
     executables: [ 'coffee' ],
     comment: '#',  multiLine: [ /^\s*#{3}\s*$/m, /^\s*#{3}\s*$/m ], jsDoc: true
-  },
-  livescript: {
-    extensions: [ 'ls' ],
-    executables: [ 'lsc' ],
-    comment: '#',  multiLine: [ /\/\*\*?/, /\*\// ], jsDoc: true
   },
   ruby: {
     extensions: [ 'rb', 'rbw', 'rake', 'gemspec' ],
@@ -1257,6 +1261,12 @@ Docker.prototype.renderCodeHtml = function(sections, filename, cb){
     title: path.basename(filename),
     sections: sections
   });
+
+  //Added by Ian
+  //Make the generated require links 'real' links
+  content = content.replace(/r\{r\{/g,"<").replace(/r\}r\}/g,">");
+  console.log(content.substr(0,1300))
+
   var html = this.renderTemplate({
     title: path.basename(filename),
     relativeDir: relDir,
@@ -1268,6 +1278,12 @@ Docker.prototype.renderCodeHtml = function(sections, filename, cb){
     js: this.extraJS.map(path.basename),
     css: this.extraCSS.map(path.basename)
   });
+
+  //Added by Ian
+  //Replace the BASE assignment
+  if (this.baseURL){
+    html = html.replace(/\{\#.+\#\}/,this.baseURL);
+  }
 
   var self = this;
 
