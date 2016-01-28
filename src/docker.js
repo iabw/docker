@@ -568,9 +568,16 @@ Docker.prototype.parseSections = function(data, language){
         (!params.comment || !matchable.split(params.multiLine[0])[0].match(commentRegex))
       ){
         // Here we start parsing a multiline comment. Store away the current section and start a new one
+        // if(section.code){
+        //   if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)) sections.push(section);
+        //   section = { docs: '', code: '' };
+        // }
         if(section.code){
-          if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)) sections.push(section);
-          section = { docs: '', code: '' };
+            if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)){
+                section.code = section.code ? section.code.slice(0,-1) : '';
+                sections.push(section);
+            }
+            section = { docs: '', code: '' };
         }
         inMultiLineComment = true;
         multiLine = line + "\n";
@@ -585,9 +592,16 @@ Docker.prototype.parseSections = function(data, language){
       !matchable.match(/#!/)
     ){
       // This is for single-line comments. Again, store away the last section and start a new one
+    //   if(section.code){
+    //     if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)) sections.push(section);
+    //     section = { docs: '', code: '' };
+    //   }
       if(section.code){
-        if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)) sections.push(section);
-        section = { docs: '', code: '' };
+          if(!section.code.match(/^\s*$/) || !section.docs.match(/^\s*$/)){
+              section.code = section.code ? section.code.slice(0,-1) : '';
+              sections.push(section);
+          }
+          section = { docs: '', code: '' };
       }
       section.docs += line.replace(commentRegex, '') + '\n';
     }else if(!params.commentsIgnore || !line.match(params.commentsIgnore)){
@@ -600,6 +614,7 @@ Docker.prototype.parseSections = function(data, language){
       section.code += line + '\n';
     }
   }
+  section.code = section.code ? section.code.slice(0,-1) : '';
   sections.push(section);
   return sections;
 };
@@ -1060,7 +1075,8 @@ Docker.prototype.highlight = function(sections, language, cb){
     out = out.replace(/^\s*<div class="highlight"><pre>/,'').replace(/<\/pre><\/div>\s*$/,'');
     var bits = out.split(/^<span[^>]*>[^<]+(?:<\/span><span[^>]*>)?----DIVIDER----[^<]*<\/span>$/gm);
     for(var i = 0; i < sections.length; i += 1){
-      sections[i].codeHtml = '<div class="highlight"><pre>' + bits[i] + '</pre></div>';
+    //   sections[i].codeHtml = '<div class="highlight"><pre>' + bits[i].slice(1,-1) + '</pre></div>';
+        sections[i].codeHtml = '<div class="highlight"><pre>' + bits[i].replace(/^\n+|\n+$/g,'') + '</pre></div>';
       sections[i].docHtml = showdown.makeHtml(sections[i].docs);
     }
     self.processDocCodeBlocks(sections, cb);
